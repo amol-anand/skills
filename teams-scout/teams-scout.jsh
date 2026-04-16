@@ -6,6 +6,9 @@
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const GRAPH_BETA = 'https://graph.microsoft.com/beta';
+// NOTE: Channel message reads must use GRAPH_BETA. The delegated token from the Teams
+// browser session does not include ChannelMessage.Read.All, so the v1.0 messages endpoint
+// returns 403. The beta endpoint works with the scopes the Teams session provides.
 const TOKEN_PATH = '/workspace/.teams-token';
 const TEAMS_CACHE_PATH = '/workspace/.teams-cache.json';
 
@@ -136,10 +139,11 @@ async function graphPost(token, path, body) {
   return resp.json();
 }
 
-async function graphGetAllPages(token, path, params, maxPages) {
+async function graphGetAllPages(token, path, params, maxPages, useBeta) {
   maxPages = maxPages || 10;
+  const base = useBeta ? GRAPH_BETA : GRAPH_BASE;
   const results = [];
-  let url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
+  let url = path.startsWith('http') ? path : `${base}${path}`;
   if (params) {
     const qs = new URLSearchParams(params).toString();
     url += (url.includes('?') ? '&' : '?') + qs;
@@ -198,20 +202,29 @@ async function cmdAuth() {
 
   // Write the token-extraction script to a temp VFS file so we avoid
   // shell-quoting headaches with the long JS expression.
+  //
+  // IMPORTANT: Modern Teams (v2, teams.microsoft.com/v2/) stores MSAL tokens in
+  // localStorage, NOT sessionStorage. We search localStorage for the freshest
+  // Graph token (key contains "accesstoken" + "graph.microsoft.com"), falling
+  // back to sessionStorage for older Teams versions.
   const extractScript = [
     '(function(){',
-    'for(var i=0;i<sessionStorage.length;i++){',
-    'var k=sessionStorage.key(i);',
-    'if(k&&k.toLowerCase().indexOf("accesstoken")!==-1&&k.toLowerCase().indexOf("graph.microsoft.com")!==-1){',
-    'try{var e=JSON.parse(sessionStorage.getItem(k));',
-    'if(e&&e.secret)return JSON.stringify({token:e.secret,expiresOn:e.expires_on||e.expiresOn})}catch(x){}}',
-    '}',
+    // Primary: localStorage (Teams v2)
+    'var best=null,bestExp=0;',
+    'var lkeys=Object.keys(localStorage);',
+    'for(var i=0;i<lkeys.length;i++){',
+    'var k=lkeys[i];',
+    'if(k.indexOf("accesstoken")===-1||k.indexOf("graph.microsoft.com")===-1)continue;',
+    'try{var e=JSON.parse(localStorage.getItem(k));',
+    'var exp=parseInt(e.expiresOn||e.expires_on||0);',
+    'if(e&&e.secret&&exp>bestExp){best=e;bestExp=exp;}}catch(x){}}',
+    'if(best)return JSON.stringify({token:best.secret,expiresOn:best.expiresOn||best.expires_on});',
+    // Fallback: sessionStorage (older Teams)
     'for(var j=0;j<sessionStorage.length;j++){',
     'var k2=sessionStorage.key(j);',
-    'if(k2&&k2.toLowerCase().indexOf("accesstoken")!==-1){',
+    'if(k2&&k2.toLowerCase().indexOf("accesstoken")!==-1&&k2.toLowerCase().indexOf("graph.microsoft.com")!==-1){',
     'try{var e2=JSON.parse(sessionStorage.getItem(k2));',
-    'if(e2&&e2.secret&&k2.toLowerCase().indexOf("microsoft")!==-1)',
-    'return JSON.stringify({token:e2.secret,expiresOn:e2.expires_on||e2.expiresOn})}catch(x2){}}',
+    'if(e2&&e2.secret)return JSON.stringify({token:e2.secret,expiresOn:e2.expires_on||e2.expiresOn})}catch(x2){}}',
     '}',
     'return null})()',
   ].join('');
@@ -330,7 +343,8 @@ async function cmdMessages() {
     token,
     `/teams/${team.id}/channels/${channel.id}/messages`,
     { $top: String(top) },
-    5
+    5,
+    true  // use beta endpoint — v1.0 requires ChannelMessage.Read.All which the delegated token lacks
   );
 
   const cutoff = new Date(since).getTime();
@@ -436,7 +450,8 @@ async function cmdMentionsFallback(token, me, since) {
           token,
           `/teams/${team.id}/channels/${channel.id}/messages`,
           { $top: '50' },
-          2
+          2,
+          true  // use beta endpoint
         );
         const cutoff = new Date(since).getTime();
         for (const m of messages) {
@@ -524,7 +539,8 @@ async function cmdUnanswered() {
     token,
     `/teams/${team.id}/channels/${channel.id}/messages`,
     { $top: '50', $expand: 'replies($top=1)' },
-    5
+    5,
+    true  // use beta endpoint
   );
 
   const cutoff = new Date(since).getTime();
@@ -573,7 +589,8 @@ async function cmdDigest() {
           token,
           `/teams/${team.id}/channels/${channel.id}/messages`,
           { $top: '50' },
-          2
+          2,
+          true  // use beta endpoint
         );
 
         const recent = messages.filter(

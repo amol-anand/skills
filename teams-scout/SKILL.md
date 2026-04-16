@@ -26,7 +26,7 @@ Wait for the page to fully load before extracting a token.
 Run `teams-scout auth` to extract and store a Graph API token from the Teams browser tab. The command:
 
 1. Finds the Teams tab via `playwright-cli tab-list`
-2. Reads the MSAL token cache from `sessionStorage` via `playwright-cli eval`
+2. Reads the MSAL token cache from **`localStorage`** via `playwright-cli eval`
 3. Stores the token at `/workspace/.teams-token`
 4. Prints the authenticated user's name and ID
 
@@ -35,6 +35,12 @@ teams-scout auth
 ```
 
 If the token expires (you get 401 errors), re-run `teams-scout auth` to refresh it. The browser session handles token renewal automatically -- just re-extract.
+
+> **Implementation note:** The Teams web client (v2, `teams.microsoft.com/v2/`) stores MSAL tokens in `localStorage`, not `sessionStorage`. The auth command searches `localStorage` for the key matching `accesstoken` + `graph.microsoft.com`, picks the entry with the latest `expiresOn`, and extracts its `secret` field. The `sessionStorage` path is a dead end on modern Teams.
+
+## API Endpoint Note
+
+Message reads use the **beta** Graph endpoint (`https://graph.microsoft.com/beta/...`), not v1.0. The delegated token from the Teams browser session does not include `ChannelMessage.Read.All`, so the v1.0 messages endpoint returns 403. The beta endpoint works with the scopes the Teams session token actually provides. Channel listing and user profile calls use v1.0 as normal.
 
 ## Commands
 
@@ -102,9 +108,9 @@ Summarize matching messages grouped by channel with timestamps and authors.
 | Problem | Fix |
 |---|---|
 | `No Teams tab found` | Open Teams: `open https://teams.microsoft.com`, wait for load, retry |
-| `No MSAL token found` | Teams page may not be fully loaded. Refresh the page and retry after a few seconds |
+| `No MSAL token found` | Modern Teams (v2) stores tokens in `localStorage`, not `sessionStorage`. If auth fails, the script may be checking the wrong storage. Ensure the skill's `cmdAuth()` searches `localStorage` for keys containing both `accesstoken` and `graph.microsoft.com`, selecting the entry with the highest `expiresOn`. |
 | `401 Unauthorized` | Token expired. Run `teams-scout auth` again |
-| `403 Forbidden` | The token lacks required scopes. The user may need to consent -- see [reference.md](reference.md) |
+| `403 Forbidden on message reads` | The v1.0 messages endpoint requires `ChannelMessage.Read.All` which the delegated Teams token does not have. Use the beta endpoint instead: `https://graph.microsoft.com/beta/teams/{id}/channels/{id}/messages` |
 | `Team/channel not found` | Run `teams-scout teams` or `teams-scout channels <team>` to list available names/IDs |
 
 For Graph API details, scopes, pagination, and MSAL token structure, see [reference.md](reference.md).
