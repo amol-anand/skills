@@ -6,7 +6,8 @@ Standalone SLICC skills installable via `upskill`.
 
 | Skill | Description | Install |
 |---|---|---|
-| [teams-scout](teams-scout/) | Scour Microsoft Teams channels via Graph API using the browser session for auth | `upskill amol-anand/skills` |
+| [handoff](handoff/) | Hand off tasks to the SLICC agent | `upskill amol-anand/skills --skill handoff` |
+| [teams-scout](teams-scout/) | Scour Microsoft Teams channels via Graph API using the browser session for auth | `upskill amol-anand/skills --skill teams-scout` |
 
 ## Usage
 
